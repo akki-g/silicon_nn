@@ -9,6 +9,16 @@ using namespace std;
 
 
 // Activation functions
+enum ActivationType {
+    SIGMOID = 0, 
+    RELU = 1,
+    TANH = 2
+};
+
+struct Activation {
+    function<double(double)> func;
+    function<double(double)> derivative;
+};
 
 
 struct Activation {
@@ -40,6 +50,19 @@ double tanhDerivative(double activatedValue) {
 }
 
 
+Activation getActivation(ActivationType type) {
+    switch (type) {
+        case SIGMOID:
+            return {sigmoid, sigmoidDerivative};
+        case RELU:
+            return {relu, reluDerivative};
+        case TANH:
+            return {tanhActivation, tanhDerivative};
+        default:
+            cerr << "Invalid activation function type" << endl;
+            exit(1);
+    }
+}
 
 // Neuron class
 class Neuron {
@@ -111,17 +134,15 @@ class NeuralNetwork {
 
     // Add a layer to the network
     // for the first layer, provide inputSize; for the rest it is inferred
-    void addLayer(int numNeurons, int inputSize = 0) {
+    void addLayer(int numNeurons, Activation act) {
         if (layers.empty()){
-            if (inputSize == -1) {
-                cerr << "Input size must be provided for the first layer" << endl;
-                exit(1);
-            }
-            layers.push_back(DenseLayer(numNeurons, inputSize));
+            cerr << "Input size must be provided for the first layer" << endl;
+            exit(1);
+
         }
         else {
             int prevLayerSize = layers.back().neurons.size();
-            layers.push_back(DenseLayer(numNeurons, prevLayerSize));
+            layers.push_back(DenseLayer(numNeurons, prevLayerSize, act));
         }
     }
 
@@ -190,6 +211,61 @@ class NeuralNetwork {
 };
 
 
+
+
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+NeuralNetwork* createNN(double learningRate) {
+    srand((unsigned) time(0));
+
+    return new NeuralNetwork(learningRate);
+}
+
+void destroyNN(NeuralNetwork* nn) {
+    delete nn;
+}
+
+void addLayerNN(NeuralNetwork* nn, int numNeurons, int inputSize, int activationType) {
+    Activation act = getActivation(static_cast<ActivationType>(activationType));
+    nn->addLayer(numNeurons, act);
+}
+
+void addLayerNN_noInput(NeuralNetwork* nn, int numNeurons, int activationType) {
+    Activation act = getActivation(static_cast<ActivationType>(activationType));
+    nn->addLayer(numNeurons, act);
+}
+
+void trainSampleNN(NeuralNetwork* nn, double* input, int inputSize, double* target, int targetSize) {
+    vector<double> inputVec(input, input+inputSize);
+    vector<double> targetVec(target, target+targetSize);
+    nn->train(inputVec, targetVec);
+}
+
+void fitNN(NeuralNetwork* nn, double* inputs, int numSample, int inputSize, double* targets, int targetSize, int epochs) {
+    for(int epoch = 0; epoch < epochs; epoch++) {
+        for(int i = 0; i < numSample; i++) {
+            double* inputStart = inputs + i * inputSize;
+            double* targetStart = targets + i * targetSize;
+            vector<double> inputVec(inputStart, inputStart + inputSize);
+            vector<double> targetVec(targetStart, targetStart + targetSize);
+            nn->train(inputVec, targetVec);
+        }
+    }
+}
+
+void predictNN(NeuralNetwork* nn, double* input, int inputSize, double* output, int outputSize) {
+    vector<double> inputVec(input, input + inputSize);
+    vector<double> result = nn->forward(inputVec);
+    int len = result.size();
+    if (len > outputSize) len = outputSize;
+    for (int i = 0; i < len; i++) {
+        output[i] = result[i];
+    }
+}
+
 void evaluationMetrics(NeuralNetwork &nn, vector<vector<double>> &inputs, vector<vector<double>> &targets) {
     
     int TP = 0, TN = 0, FP = 0, FN = 0;
@@ -216,4 +292,6 @@ void evaluationMetrics(NeuralNetwork &nn, vector<vector<double>> &inputs, vector
     cout << "F1 Score:  " << f1 << "\n";
 };
 
-
+#ifdef __cplusplus
+}
+#endif
