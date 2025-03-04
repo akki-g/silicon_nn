@@ -28,6 +28,9 @@ class Device {
         // The activation is provided as a pointer to a function.
         virtual void applyActivation(std::vector<double>& data, double (*activation)(double)) = 0;
 
+        // Cleanup any resources associated with the device.
+        virtual void cleanup() = 0;
+
         // Factory method: Given a device type, returns an instance of the appropriate Device.
         static Device* create(DeviceType type);
 };

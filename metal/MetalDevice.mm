@@ -17,8 +17,11 @@ MetalDevice::MetalDevice() {
 }
 
 MetalDevice::~MetalDevice() {
-    device = nil;
-    std::cout << "MetalDevice destroyed" << std::endl;
+    // Optionally, you could call cleanup() here to ensure cleanup on destruction.
+    if (!isCleaned) {
+        cleanup();
+    }
+    std::cout << "MetalDevice: Destructor called" << std::endl;
 }
 
 double MetalDevice::dot(const std::vector<double>& a, const std::vector<double>& b) {
@@ -59,7 +62,21 @@ void MetalDevice::applyActivation(std::vector<double>& A, double (*activation)(d
     }
 }
 
-bool MetalDevice::metalIsAvaliable() {
-    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-    return device != nil;
+bool MetalDevice::metalIsAvailable() {
+    id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
+    return (dev != nil);
+}
+
+void MetalDevice::cleanup() {
+    if (isCleaned) return;  // Prevent double cleanup.
+    std::cout << "MetalDevice: Cleanup called, releasing Metal resources." << std::endl;
+#ifdef __OBJC__
+    if (commandQueue) {
+        commandQueue = nil;
+    }
+    if (metalDevice) {
+        metalDevice = nil;
+    }
+#endif
+    isCleaned = true;
 }

@@ -17,7 +17,7 @@ _lib = ctypes.CDLL(lib_path)
 
 # createNN: takes a double (learning rate) and returns a pointer.
 _lib.createNN.restype = ctypes.c_void_p
-_lib.createNN.argtypes = [ctypes.c_double]
+_lib.createNN.argtypes = [ctypes.c_double, ctypes.c_char]
 
 # addLayerNN: (pointer, int numNeurons, int inputSize, int activationType) -> void.
 _lib.addLayerNN.restype = None
@@ -43,14 +43,18 @@ _lib.predictNN.argtypes = [
     ctypes.POINTER(ctypes.c_double), ctypes.c_int
 ]
 
+# cleanupDevice: (pointer) -> void.
+_lib.cleanupDevice.restype = None
+_lib.cleanupDevice.argtypes = [ctypes.c_void_p]
+
 # destroyNN: (pointer) -> void.
 _lib.destroyNN.restype = None
 _lib.destroyNN.argtypes = [ctypes.c_void_p]
 
 class NeuralNetwork:
     """Python wrapper for the C++ NeuralNetwork library."""
-    def __init__(self, learning_rate=0.5):
-        self.nn_ptr = _lib.createNN(ctypes.c_double(learning_rate))
+    def __init__(self, learning_rate=0.5, device='g'):
+        self.nn_ptr = _lib.createNN(ctypes.c_double(learning_rate), ctypes.c_char(device.encode()))
 
     def add_layer(self, num_neurons, input_size, activation_type):
         """
@@ -65,6 +69,14 @@ class NeuralNetwork:
     def add_hidden_layer(self, num_neurons, activation_type):
         """
         Add a subsequent (hidden or output) layer.
+        :param num_neurons: Number of neurons.
+        :param activation_type: 0 for SIGMOID, 1 for RELU, 2 for TANH.
+        """
+        _lib.addLayerNN_noInput(self.nn_ptr, ctypes.c_int(num_neurons), ctypes.c_int(activation_type))
+
+    def add_output_layer(self, num_neurons, activation_type):
+        """
+        Add the output layer.
         :param num_neurons: Number of neurons.
         :param activation_type: 0 for SIGMOID, 1 for RELU, 2 for TANH.
         """
@@ -111,6 +123,8 @@ class NeuralNetwork:
                        output_ptr, ctypes.c_int(output_size))
         return output_arr
 
+    def cleanDevice(self):
+        _lib.cleanupDevice(self.nn_ptr)
     def __del__(self):
         if self.nn_ptr:
             _lib.destroyNN(self.nn_ptr)

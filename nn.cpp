@@ -1,3 +1,7 @@
+#include "common/Device.h"
+#include "cpu/CPUDevice.h"
+#include "metal/MetalDevice.h"
+
 #include <iostream>
 #include <vector>
 #include <cmath>
@@ -77,15 +81,8 @@ class Neuron {
 
     // Activation function
     // Takes in a vector of inputs and returns the output of the neuron
-    double activate(vector<double>& inputs, const Activation& act) {
-        double sum = bias;
-        const double* input_ptr = inputs.data();
-        const double* weight_ptr = weights.data();
-        int n = weights.size();
-
-        for(int i = 0; i < n; i++) {
-            sum += input_ptr[i] * weight_ptr[i];
-        }
+    double activate(vector<double>& inputs, const Activation& act, Device* device) {
+        double sum = device->dot(inputs, weights) + bias;
         output = act.func(sum);
         return output;
     }
@@ -109,11 +106,11 @@ class DenseLayer {
 
     // Forward pass
     // Takes in a vector of inputs and returns a vector of outputs
-    vector<double> forward(const vector<double>& inputs) {
+    vector<double> forward(const vector<double>& inputs, Device* device) {
         vector<double> outputs;
         outputs.resize(neurons.size()); 
         for (size_t i = 0; i < neurons.size(); i++) {
-            outputs[i] = neurons[i].activate(const_cast<vector<double>&>(inputs), activationFunction);
+            outputs[i] = neurons[i].activate(const_cast<vector<double>&>(inputs), activationFunction, device);
         }
         return outputs;
     }
@@ -126,8 +123,27 @@ class NeuralNetwork {
     public:
     vector<DenseLayer> layers;
     double learningRate;
+    Device* device;
 
-    NeuralNetwork(double lr = 0.5) : learningRate(lr) {}
+    NeuralNetwork(double lr = 0.5, char c = 'c') : learningRate(lr) {
+        if (c == 'c') {
+            device = new CPUDevice();
+        }
+        else {
+            if (MetalDevice::metalIsAvailable()) {
+                cout << "Using device: Metal" << endl;
+                device = new MetalDevice();
+            }
+            else {
+                cout << "Metal is not available defualting to CPU" << endl;
+                device = new CPUDevice();
+            }
+        }
+    }
+
+    ~NeuralNetwork() {
+        delete device;
+    }
 
     // Add a layer to the network
     // for the first layer, provide inputSize; for the rest it is inferred
@@ -155,7 +171,7 @@ class NeuralNetwork {
     vector<double> forward(vector<double>& inputs) {
         vector<double> outputs = inputs;
         for (DenseLayer &layer : layers) {
-            outputs = layer.forward(outputs);
+            outputs = layer.forward(outputs, device);
         }
         return outputs;
     }
@@ -167,7 +183,7 @@ class NeuralNetwork {
         layerInputs[0] = input;
 
         for (size_t l = 0; l < layers.size(); l++) {
-            vector<double> out = layers[l].forward(layerInputs[l]);
+            vector<double> out = layers[l].forward(layerInputs[l], device);
             layerInputs[l+1] = out;
         }
         vector<double> output = layerInputs.back();
@@ -225,10 +241,10 @@ class NeuralNetwork {
 extern "C" {
 #endif
 
-NeuralNetwork* createNN(double learningRate) {
+NeuralNetwork* createNN(double learningRate, char c) {
     srand((unsigned) time(0));
 
-    return new NeuralNetwork(learningRate);
+    return new NeuralNetwork(learningRate, c);
 }
 
 void destroyNN(NeuralNetwork* nn) {
@@ -297,7 +313,13 @@ void evaluationMetrics(NeuralNetwork &nn, vector<vector<double>> &inputs, vector
     cout << "Precision: " << precision << "\n";
     cout << "Recall:    " << recall << "\n";
     cout << "F1 Score:  " << f1 << "\n";
-};
+}
+
+void cleanupDevice(NeuralNetwork* nn) {
+    if (nn && nn->device) {
+        nn->device->cleanup();
+    }
+}
 
 #ifdef __cplusplus
 }

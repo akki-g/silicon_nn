@@ -23,3 +23,10 @@ std::vector<double> CPUDevice::matmul(const std::vector<double>& A, const std::v
     }
     return result;
 }
+
+
+void CPUDevice::applyActivation(std::vector<double>& data, double (*activation)(double)) {
+    for (auto& d : data) {
+        d = activation(d);
+    }
+}

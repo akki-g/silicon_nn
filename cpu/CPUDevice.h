@@ -12,4 +12,6 @@ public:
         int A_rows, int A_cols, int B_cols) override;
 
     void applyActivation(std::vector<double>& data, double (*activation)(double)) override;
+
+    void cleanup() override {};
 };
