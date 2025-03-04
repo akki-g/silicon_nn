@@ -1,0 +1,11 @@
+LICENSE
+README.md
+setup.py
+neural_network/__init__.py
+neural_network/libnn.dylib
+neural_network/nn.py
+nn_package.egg-info/PKG-INFO
+nn_package.egg-info/SOURCES.txt
+nn_package.egg-info/dependency_links.txt
+nn_package.egg-info/requires.txt
+nn_package.egg-info/top_level.txt

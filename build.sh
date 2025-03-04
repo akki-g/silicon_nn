@@ -1,9 +1,13 @@
-set -e 
+#!/bin/bash
+set -e
+
+OUTPUT_DIR="neural_network"
 
 if [[ "$(uname)" == "Darwin" ]]; then
     echo "Building for macOS"
-    g++ -dynamiclib -std=c++11 -o libnn.dylib nn.cpp
+    g++ -O3 -march=native -ffast-math -dynamiclib -std=c++11 -o ${OUTPUT_DIR}/libnn.dylib nn.cpp -Wl,-rpath,/usr/local/lib
 else
     echo "Building for Linux"
-    g++ -shared -fPIC -std=c++11 -o libnn.so nn.cpp
+    g++ -O3 -march=native -ffast-math -shared -fPIC -std=c++11 -o ${OUTPUT_DIR}/libnn.so nn.cpp -Wl,-rpath,/usr/local/lib
 fi
+echo "Build complete: shared library saved in ${OUTPUT_DIR}"

@@ -78,11 +78,14 @@ class Neuron {
     // Activation function
     // Takes in a vector of inputs and returns the output of the neuron
     double activate(vector<double>& inputs, const Activation& act) {
-        double sum = 0;
-        for (int i = 0; i < weights.size(); i++) {
-            sum += inputs[i] * weights[i];
+        double sum = bias;
+        const double* input_ptr = inputs.data();
+        const double* weight_ptr = weights.data();
+        int n = weights.size();
+
+        for(int i = 0; i < n; i++) {
+            sum += input_ptr[i] * weight_ptr[i];
         }
-        sum += bias;
         output = act.func(sum);
         return output;
     }
@@ -106,12 +109,12 @@ class DenseLayer {
 
     // Forward pass
     // Takes in a vector of inputs and returns a vector of outputs
-    vector<double> forward(vector<double>& inputs) {
+    vector<double> forward(const vector<double>& inputs) {
         vector<double> outputs;
-        for (Neuron &neuron : neurons) {
-            outputs.push_back(neuron.activate(inputs, activationFunction));
+        outputs.resize(neurons.size()); 
+        for (size_t i = 0; i < neurons.size(); i++) {
+            outputs[i] = neurons[i].activate(const_cast<vector<double>&>(inputs), activationFunction);
         }
-
         return outputs;
     }
 };
@@ -128,6 +131,13 @@ class NeuralNetwork {
 
     // Add a layer to the network
     // for the first layer, provide inputSize; for the rest it is inferred
+    void addLayer(int numNeurons, int inputSize, const Activation& act) {
+        if (!layers.empty()){
+            cerr << "First layer already added." << endl;
+            exit(1);
+        }
+        layers.push_back(DenseLayer(numNeurons, inputSize, act));
+    }
     void addLayer(int numNeurons, Activation act) {
         if (layers.empty()){
             cerr << "Input size must be provided for the first layer" << endl;
@@ -153,18 +163,21 @@ class NeuralNetwork {
     // Train the network on one training example using backpropagation
     void train(const vector<double>& input, const vector<double>& target) {
         // 1. Forward pass: stores inputs to each layer (including the initial input)
-        vector<vector<double>> layerInputs;
-        vector<double> currentInput = input;
-        layerInputs.push_back(currentInput);
-        for (DenseLayer &layer : layers) {
-            currentInput = layer.forward(currentInput);
-            layerInputs.push_back(currentInput);
+        vector<vector<double>> layerInputs(layers.size() + 1);
+        layerInputs[0] = input;
+
+        for (size_t l = 0; l < layers.size(); l++) {
+            vector<double> out = layers[l].forward(layerInputs[l]);
+            layerInputs[l+1] = out;
         }
-        vector<double> output = currentInput;
+        vector<double> output = layerInputs.back();
 
         // 2. Backpropagation
         // errors[l] will store the error of each neuron in layer l
         vector<vector<double>> errors(layers.size());
+        for (size_t l = 0; l < layers.size(); l++) {
+            errors[l].resize(layers[l].neurons.size(), 0.0);
+        }
 
         // Calculate the error of the output layer
         int lastLayer = layers.size() - 1;
@@ -224,7 +237,7 @@ void destroyNN(NeuralNetwork* nn) {
 
 void addLayerNN(NeuralNetwork* nn, int numNeurons, int inputSize, int activationType) {
     Activation act = getActivation(static_cast<ActivationType>(activationType));
-    nn->addLayer(numNeurons, act);
+    nn->addLayer(numNeurons, inputSize, act);
 }
 
 void addLayerNN_noInput(NeuralNetwork* nn, int numNeurons, int activationType) {

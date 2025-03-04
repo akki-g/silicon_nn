@@ -27,7 +27,7 @@ with open("README.md", "r") as f:
 
 
 setup(
-    name = "nn_package",
+    name = "neural_network",
     version = "0.1.0",
     author = "Akshat Guduru",
     author_email = "akshat.guduru@gmail.com",
