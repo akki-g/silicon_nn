@@ -41,7 +41,7 @@ y_train = y_train.reshape(-1, 1)
 y_test = y_test.reshape(-1, 1)
 
 # Number of epochs
-epochs = 1000  # Reduced to 1000 to avoid excessive runtime
+epochs = 100  # Reduced to 1000 to avoid excessive runtime
 
 # -------------------------
 # Benchmark: Custom Neural Network

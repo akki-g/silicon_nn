@@ -1,6 +1,7 @@
 #include "common/Device.h"
 #include "cpu/CPUDevice.h"
 #include "metal/MetalDevice.h"
+#include "parallel/parallel.h"
 
 #include <iostream>
 #include <vector>
@@ -128,12 +129,11 @@ class DenseLayer {
     // Forward pass
     // Takes in a vector of inputs and returns a vector of outputs
     vector<double> forward(const vector<double>& inputs, Device* device) {
-        vector<double> outputs;
-        outputs.resize(neurons.size()); 
-        #pragma omp parallel for
-        for (size_t i = 0; i < neurons.size(); i++) {
+        vector<double> outputs(neurons.size());
+        ThreadPool pool(std::thread::hardware_concurrency());
+        parallel_for<size_t>(0, neurons.size(), [&](size_t i) {
             outputs[i] = neurons[i].activate(const_cast<vector<double>&>(inputs), activationFunction, device);
-        }
+        }, pool);
         return outputs;
     }
 };
@@ -157,10 +157,11 @@ class BatchNormLayer{
             runningMean = momentum * runningMean + (1 - momentum) * mean;
             runningVar = momentum * runningVar + (1 - momentum) * var;
             std::vector<double> normalized(x.size());
-            #pragma omp parallel for
-            for (size_t i = 0; i < x.size(); i++){
-                normalized[i] = gamma * ((x[i] - mean) / std::sqrt(var + epsilon)) + beta;
-            }
+            
+            ThreadPool pool(std::thread::hardware_concurrency());
+            parallel_for<size_t>(0, x.size(), [&](size_t i) {
+                normalized[i] = gamma *( (x[i] - mean) / sqrt(var + epsilon)) + beta;
+            }, pool);
             return normalized;
         }
     private: 
@@ -197,11 +198,11 @@ class ResidualBlock{
                 cerr << "Residual block input and output size mismatch" << endl;
                 exit(1);
             }
-            std::vector<double> output(out2.size());
-            #pragma omp parallel for
-            for (size_t i = 0; i < out2.size(); i++){
+            std::vector<double> output(input.size());
+            ThreadPool pool(std::thread::hardware_concurrency());
+            parallel_for<size_t>(0, input.size(), [&](size_t i) {
                 output[i] = input[i] + out2[i];
-            }
+            }, pool);
             return output;
         }
     };
@@ -324,39 +325,38 @@ class NeuralNetwork {
         // Calculate the error of the output layer
         int lastLayer = layers.size() - 1;
         errors[lastLayer].resize(layers[lastLayer].neurons.size());
-        #pragma omp parallel for
-        for (int i = 0; i < layers[lastLayer].neurons.size(); i++) {
+        ThreadPool pool(std::thread::hardware_concurrency());
+        parallel_for<size_t>(0, layers[lastLayer].neurons.size(), [&](size_t i) {
             double out = layerInputs.back()[i];
-            // Error = (target - output) * f'(output)
-            errors[lastLayer][i] = (target[i] - out) * layers[lastLayer].activationFunction.derivative(out);
 
-        }
+            errors[lastLayer][i] = (target[i] - out) * layers[lastLayer].activationFunction.derivative(out);
+        }, pool);
 
         // Propagate the errors backwards through the hidden layers
         for (int l = layers.size() - 2; l >= 0; l--) {
             errors[l].resize(layers[l].neurons.size());
-            #pragma omp parallel for
-            for (size_t i=0; i < layers[l].neurons.size(); i++) {
-                double error = 0.0;
-                for (size_t j = 0; j < layers[l+1].neurons.size(); j++) {
+            ThreadPool pool(std::thread::hardware_concurrency());
+            parallel_for<size_t>(0, layers[l].neurons.size(), [&](size_t i){
+                double error = 0.0; 
+                for(size_t j = 0; j < layers[l+1].neurons.size(); j++){
                     error += errors[l+1][j] * layers[l+1].neurons[j].weights[i];
                 }
                 double out = layerInputs[l+1][i];
                 errors[l][i] = error * layers[l].activationFunction.derivative(out);
-            }
+            }, pool);
         }
 
         // Update the weights and biases
         for (size_t l = 0; l < layers.size(); l++) {
             vector<double> prevLayerOutput = layerInputs[l];
-            #pragma omp parallel for
-            for (size_t i = 0; i < layers[l].neurons.size(); i++) {
-                Neuron &neuron = layers[l].neurons[i];
+            ThreadPool pool(std::thread::hardware_concurrency());
+            parallel_for<size_t>(0, layers[l].neurons.size(), [&](size_t i) {
+                Neuron& neuron = layers[l].neurons[i];
                 for (size_t j = 0; j < prevLayerOutput.size(); j++) {
                     neuron.weights[j] += learningRate * errors[l][i] * prevLayerOutput[j];
                 }
                 neuron.bias += learningRate * errors[l][i];
-            }
+            }, pool);
         }
     }
 };
