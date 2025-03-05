@@ -1,5 +1,5 @@
 #!/bin/sh
-'''exec' "/Users/akshatguduru/Desktop/Personal Items/Personal Projects/silicon_nn/env/bin/python3" "$0" "$@"
+'''exec' "/Users/akshatguduru/Desktop/Personal Items/Personal Projects/silicon_nn/env/bin/python3.11" "$0" "$@"
 ' '''
 # -*- coding: utf-8 -*-
 import re

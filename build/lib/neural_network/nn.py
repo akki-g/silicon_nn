@@ -47,6 +47,14 @@ _lib.predictNN.argtypes = [
 _lib.cleanupDevice.restype = None
 _lib.cleanupDevice.argtypes = [ctypes.c_void_p]
 
+# initBatchNormLayers: (pointer) -> void.
+_lib.initBatchNormLayers.restype = None
+_lib.initBatchNormLayers.argtypes = [ctypes.c_void_p]
+
+# initResidualBlock: (pointer) -> void.
+_lib.initResidualBlock.restype = None
+_lib.initResidualBlock.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+
 # destroyNN: (pointer) -> void.
 _lib.destroyNN.restype = None
 _lib.destroyNN.argtypes = [ctypes.c_void_p]
@@ -82,6 +90,20 @@ class NeuralNetwork:
         """
         _lib.addLayerNN_noInput(self.nn_ptr, ctypes.c_int(num_neurons), ctypes.c_int(activation_type))
     
+    def init_batch_norm(self):
+        """
+        Initialize batch normalization layers.
+        """
+        _lib.initBatchNormLayers(self.nn_ptr)
+    
+    def init_residual_block(self, num_neurons, num_inputs, activation_type):
+        """
+        Initialize a residual block.
+        :param num_neurons: Number of neurons.
+        :param activation_type: 0 for SIGMOID, 1 for RELU, 2 for TANH.
+        """
+        _lib.initResidualBlock(self.nn_ptr, ctypes.c_int(num_neurons), ctypes.c_int(num_inputs), ctypes.c_int(activation_type), ctypes.c_int(1))
+
     def fit(self, inputs, targets, epochs):
         """
         Train the network on a dataset.
