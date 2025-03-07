@@ -51,6 +51,8 @@
         "variant": "cpp",
         "vector": "cpp",
         "algorithm": "cpp",
-        "*.inc": "cpp"
+        "*.inc": "cpp",
+        "core": "cpp",
+        "specialfunctions": "cpp"
     }
 }
