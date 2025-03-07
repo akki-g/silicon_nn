@@ -128,7 +128,7 @@ public:
     vector<double> forward(const vector<double>& inputs, Device* device) {
         size_t n = neurons.size();
         vector<double> outputs(n);
-        size_t blockSize = 8;  // Tunable parameter.
+        size_t blockSize = (n < 64) ? n : 32;  // Tunable parameter.
         size_t totalBlocks = (n + blockSize - 1) / blockSize;
         parallel_for<size_t>(0, totalBlocks, [&](size_t block) {
             size_t start = block * blockSize;
@@ -160,7 +160,7 @@ public:
         runningVar = momentum * runningVar + (1 - momentum) * var;
         vector<double> normalized(x.size());
         size_t n = x.size();
-        size_t blockSize = 16;
+        size_t blockSize = (n < 64) ? n : 32;
         size_t totalBlocks = (n + blockSize - 1) / blockSize;
         parallel_for<size_t>(0, totalBlocks, [&](size_t block) {
             size_t start = block * blockSize;
@@ -202,8 +202,16 @@ public:
             exit(1);
         }
         vector<double> output(input.size());
-        parallel_for<size_t>(0, input.size(), [&](size_t i) {
-            output[i] = input[i] + out2[i];
+
+        size_t n = input.size();
+        size_t blockSize = (n < 64) ? n : 32;
+        size_t totalBlocks = (n + blockSize - 1) / blockSize;
+        parallel_for<size_t>(0, totalBlocks, [&](size_t block) {
+            size_t start = block * blockSize;
+            size_t end = min(start + blockSize, n);
+            for (size_t i = start; i < end; i++) {
+                output[i] = input[i] + out2[i];
+            }
         }, parallel::globalThreadPool);
         return output;
     }
@@ -224,7 +232,7 @@ public:
     Optimizer* optimizer;  // Modular optimizer pointer
 
     NeuralNetwork(double lr = 0.001, char c = 'c', bool batch = true, bool dropout = true,
-                  double dropProb = 0.2, bool residual = true, double weightDecay = 0.0001)
+                  double dropProb = 0.05, bool residual = true, double weightDecay = 0.0001)
         : learningRate(lr), useBatchNorm(batch), useDropout(dropout), dropoutProb(dropProb),
           useResidualBlock(residual), residualBlock(nullptr) {
         if (c == 'c') {
@@ -295,6 +303,9 @@ public:
     }
 
     // Mini-batch training function.
+    // --- Inside NeuralNetwork class ---
+
+    // Mini-batch training function with corrected gradient accumulation.
     void trainBatch(const vector<vector<double>>& batchInputs,
                     const vector<vector<double>>& batchTargets) {
         size_t batchSize = batchInputs.size();
@@ -306,66 +317,89 @@ public:
             allLayerOutputs[s] = forwardAllLayers(batchInputs[s]);
         }
 
-        // Initialize gradient accumulators per layer.
-        vector<vector<double>> gradAcc(numLayers);
+        // Initialize gradient accumulators:
+        // gradAcc[l][i] will be a vector (of size equal to input dimension for layer l)
+        // that accumulates the gradient for neuron i in layer l.
+        vector<vector<vector<double>>> gradAcc(numLayers);
         for (size_t l = 0; l < numLayers; l++) {
-            gradAcc[l].resize(layers[l].neurons.size(), 0.0);
+            size_t numNeurons = layers[l].neurons.size();
+            // Determine input size for layer l: for l==0, it is batchInputs[0].size(); else, the number of neurons in the previous layer.
+            size_t inputSize = (l == 0) ? batchInputs[0].size() : layers[l-1].neurons.size();
+            gradAcc[l].resize(numNeurons, vector<double>(inputSize, 0.0));
+        }
+        
+        // Initialize bias gradient accumulators for each neuron.
+        vector<vector<double>> gradBias(numLayers);
+        for (size_t l = 0; l < numLayers; l++) {
+            gradBias[l].resize(layers[l].neurons.size(), 0.0);
         }
 
-        // Backward pass: compute errors and accumulate gradients.
+        // Backward pass: for each sample, compute per-neuron error and accumulate weight gradients.
+        // We'll store sampleErrors[s][l][i] = error for neuron i in layer l for sample s.
+        vector<vector<vector<double>>> sampleErrors(batchSize);
         for (size_t s = 0; s < batchSize; s++) {
-            const auto& outs = allLayerOutputs[s];
+            sampleErrors[s].resize(numLayers);
+            // Output layer error.
             int outLayer = numLayers - 1;
-            vector<double> sampleError(layers[outLayer].neurons.size(), 0.0);
-            for (size_t i = 0; i < layers[outLayer].neurons.size(); i++) {
-                double outVal = outs[outLayer][i];
-                sampleError[i] = (batchTargets[s][i] - outVal) * layers[outLayer].activationFunction.derivative(outVal);
+            size_t outCount = layers[outLayer].neurons.size();
+            sampleErrors[s][outLayer] = vector<double>(outCount, 0.0);
+            for (size_t i = 0; i < outCount; i++) {
+                double outVal = allLayerOutputs[s][outLayer][i];
+                sampleErrors[s][outLayer][i] = outVal - batchTargets[s][i];
             }
-            for (size_t i = 0; i < sampleError.size(); i++) {
-                gradAcc[outLayer][i] += sampleError[i];
-            }
-            vector<vector<double>> sampleErrors(numLayers);
-            sampleErrors[outLayer] = sampleError;
+            // Backpropagate errors from last layer to first.
             for (int l = numLayers - 2; l >= 0; l--) {
-                sampleErrors[l].resize(layers[l].neurons.size(), 0.0);
-                for (size_t i = 0; i < layers[l].neurons.size(); i++) {
+                size_t neuronCount = layers[l].neurons.size();
+                sampleErrors[s][l] = vector<double>(neuronCount, 0.0);
+                for (size_t i = 0; i < neuronCount; i++) {
                     double errorSum = 0.0;
                     for (size_t j = 0; j < layers[l+1].neurons.size(); j++) {
-                        errorSum += layers[l+1].neurons[j].weights[i] * sampleErrors[l+1][j];
+                        errorSum += layers[l+1].neurons[j].weights[i] * sampleErrors[s][l+1][j];
                     }
-                    double outVal = outs[l+1][i];
-                    sampleErrors[l][i] = errorSum * layers[l].activationFunction.derivative(outVal);
-                    gradAcc[l][i] += sampleErrors[l][i];
+                    double outVal = allLayerOutputs[s][l+1][i];
+                    sampleErrors[s][l][i] = errorSum * layers[l].activationFunction.derivative(outVal);
+                }
+            }
+            
+            // Accumulate gradients for each layer.
+            for (size_t l = 0; l < numLayers; l++) {
+                // Determine the input vector for layer l: if l==0, use batchInputs[s]; else, use output of previous layer.
+                const vector<double>& inputVec = (l == 0) ? batchInputs[s] : allLayerOutputs[s][l];
+                size_t inputSize = inputVec.size();
+                size_t numNeurons = layers[l].neurons.size();
+                for (size_t i = 0; i < numNeurons; i++) {
+                    // For each weight in neuron i, accumulate the product error * input.
+                    for (size_t j = 0; j < inputSize; j++) {
+                        gradAcc[l][i][j] += sampleErrors[s][l][i] * inputVec[j];
+                    }
+                    // Accumulate bias gradient.
+                    gradBias[l][i] += sampleErrors[s][l][i];
                 }
             }
         }
 
-        // Update parameters using the optimizer.
+        // Average gradients over the batch and update parameters via the optimizer.
         for (size_t l = 0; l < numLayers; l++) {
-            vector<double> avgPrevOutput;
-            for (size_t s = 0; s < batchSize; s++) {
-                const vector<double>& inVec = allLayerOutputs[s][l];
-                if (avgPrevOutput.empty())
-                    avgPrevOutput = inVec;
-                else {
-                    for (size_t k = 0; k < inVec.size(); k++) {
-                        avgPrevOutput[k] += inVec[k];
-                    }
-                }
-            }
-            for (double &val : avgPrevOutput)
-                val /= batchSize;
-            for (size_t i = 0; i < layers[l].neurons.size(); i++) {
-                Neuron &neuron = layers[l].neurons[i];
-                vector<double> gradVec(avgPrevOutput.size());
-                for (size_t j = 0; j < avgPrevOutput.size(); j++) {
-                    gradVec[j] = (gradAcc[l][i] / batchSize) * avgPrevOutput[j];
-                }
-                optimizer->updateVector(neuron.weights, neuron.m_weights, neuron.v_weights, gradVec);
-                optimizer->updateScalar(neuron.bias, neuron.m_bias, neuron.v_bias, gradAcc[l][i] / batchSize);
+            size_t numNeurons = layers[l].neurons.size();
+            for (size_t i = 0; i < numNeurons; i++) {
+                // Average weight gradients.
+                vector<double> avgGrad = gradAcc[l][i];
+                for (double &val : avgGrad)
+                    val /= batchSize;
+                double avgBiasGrad = gradBias[l][i] / batchSize;
+                // Update weights and bias using the optimizer.
+                optimizer->updateVector(layers[l].neurons[i].weights,
+                                        layers[l].neurons[i].m_weights,
+                                        layers[l].neurons[i].v_weights,
+                                        avgGrad);
+                optimizer->updateScalar(layers[l].neurons[i].bias,
+                                        layers[l].neurons[i].m_bias,
+                                        layers[l].neurons[i].v_bias,
+                                        avgBiasGrad);
             }
         }
     }
+
 
     // Single-sample training wrapper.
     void train(const vector<double>& input, const vector<double>& target) {
@@ -418,13 +452,29 @@ void trainSampleNN(NeuralNetwork* nn, double* input, int inputSize, double* targ
     nn->train(inputVec, targetVec);
 }
 
+
 void fitNN(NeuralNetwork* nn, double* inputs, int numSample, int inputSize, double* targets, int targetSize, int epochs) {
+    // Create an index vector [0, 1, 2, ..., numSample-1]
+    std::vector<int> indices(numSample);
+    for (int i = 0; i < numSample; i++) {
+        indices[i] = i;
+    }
+
+    // Setup a random engine for shuffling
+    std::random_device rd;
+    std::mt19937 g(rd());
+
     for (int epoch = 0; epoch < epochs; epoch++) {
-        for (int i = 0; i < numSample; i++) {
-            double* inputStart = inputs + i * inputSize;
-            double* targetStart = targets + i * targetSize;
-            vector<double> inputVec(inputStart, inputStart + inputSize);
-            vector<double> targetVec(targetStart, targetStart + targetSize);
+        // Shuffle the indices for each epoch
+        std::shuffle(indices.begin(), indices.end(), g);
+
+        for (int j = 0; j < numSample; j++) {
+            // Use the shuffled index
+            int idx = indices[j];
+            double* inputStart = inputs + idx * inputSize;
+            double* targetStart = targets + idx * targetSize;
+            std::vector<double> inputVec(inputStart, inputStart + inputSize);
+            std::vector<double> targetVec(targetStart, targetStart + targetSize);
             nn->train(inputVec, targetVec);
         }
     }
@@ -440,6 +490,7 @@ void predictNN(NeuralNetwork* nn, double* input, int inputSize, double* output, 
         output[i] = result[i];
     }
 }
+
 
 void evaluationMetrics(NeuralNetwork &nn, vector<vector<double>> &inputs, vector<vector<double>> &targets) {
     int TP = 0, TN = 0, FP = 0, FN = 0;

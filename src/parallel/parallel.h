@@ -79,6 +79,13 @@ private:
 template <typename IndexType, typename Function>
 void parallel_for(IndexType start, IndexType end, Function f, ThreadPool &pool) {
     IndexType total = end - start;
+
+    if (total < 32) {
+        for (IndexType i = start; i < end; i++) {
+            f(i);
+        }
+        return;
+    }
     // Use a minimum block size to reduce scheduling overhead.
     const IndexType minBlockSize = 64; // Tune this parameter as needed.
     

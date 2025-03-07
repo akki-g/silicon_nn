@@ -41,7 +41,7 @@ y_train = y_train.reshape(-1, 1)
 y_test = y_test.reshape(-1, 1)
 
 # Number of epochs
-epochs = 100  # Reduced to 1000 to avoid excessive runtime
+epochs = 100  # Reduced to 100 to avoid excessive runtime
 
 # -------------------------
 # Benchmark: Custom Neural Network
@@ -49,7 +49,7 @@ epochs = 100  # Reduced to 1000 to avoid excessive runtime
 print("Benchmarking Custom Neural Network:")
 start_time = time.time()
 lr = 0.01
-custom_nn = NeuralNetwork(lr, "g")
+custom_nn = NeuralNetwork(lr, "c")
 custom_nn.add_layer(128, input_size=X_train_flat.shape[1], activation_type=1)  # Hidden layer: ReLU
 
 custom_nn.init_residual_block(num_neurons=128, num_inputs=128, activation_type=1)
