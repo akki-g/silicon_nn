@@ -51,14 +51,10 @@ start_time = time.time()
 lr = 0.01
 custom_nn = NeuralNetwork(lr, "c")
 custom_nn.add_layer(128, input_size=X_train_flat.shape[1], activation_type=1)  # Hidden layer: ReLU
-
-custom_nn.init_residual_block(num_neurons=128, num_inputs=128, activation_type=1)
-
 custom_nn.add_hidden_layer(128, activation_type=1)  # Hidden layer: ReLU
 custom_nn.add_hidden_layer(128, activation_type=1)  # Hidden layer: ReLU
 custom_nn.add_hidden_layer(128, activation_type=1)  # Hidden layer: ReLU
 custom_nn.add_output_layer(1, activation_type=0)  # Output layer: Sigmoid
-custom_nn.init_batch_norm()
 custom_nn.fit(X_train_flat, y_train, epochs=epochs)
 custom_time = time.time() - start_time
 

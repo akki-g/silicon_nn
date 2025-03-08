@@ -13,26 +13,30 @@ else:
 lib_path = os.path.join(os.path.dirname(__file__), lib_name)
 _lib = ctypes.CDLL(lib_path)
 
-# Set up function prototypes to match the C++ exports.
+# Set up function prototypes to match the updated C++ exports.
 
-# createNN: takes a double (learning rate) and returns a pointer.
+# createNN: takes a double (learning rate) and a char (device type) and returns a pointer.
 _lib.createNN.restype = ctypes.c_void_p
 _lib.createNN.argtypes = [ctypes.c_double, ctypes.c_char]
 
-# addLayerNN: (pointer, int numNeurons, int inputSize, int activationType) -> void.
+# addLayerNN: used for the first layer (with input size)
 _lib.addLayerNN.restype = None
 _lib.addLayerNN.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int]
 
-# addLayerNN_noInput: (pointer, int numNeurons, int activationType) -> void.
-_lib.addLayerNN_noInput.restype = None
-_lib.addLayerNN_noInput.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+# New function names for subsequent layers (hidden and output):
+_lib.addHiddenLayerNN.restype = None
+_lib.addHiddenLayerNN.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
 
-# fitNN: (pointer, double* inputs, int numSamples, int inputSize, double* targets, int outputSize, int epochs) -> void.
+_lib.addOutputLayerNN.restype = None
+_lib.addOutputLayerNN.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+
+# fitNN: (pointer, double* inputs, int numSamples, int inputSize, 
+#         double* targets, int outputSize, int epochs, int batchSize) -> void.
 _lib.fitNN.restype = None
 _lib.fitNN.argtypes = [
     ctypes.c_void_p,
     ctypes.POINTER(ctypes.c_double), ctypes.c_int, ctypes.c_int,
-    ctypes.POINTER(ctypes.c_double), ctypes.c_int, ctypes.c_int
+    ctypes.POINTER(ctypes.c_double), ctypes.c_int, ctypes.c_int, ctypes.c_int
 ]
 
 # predictNN: (pointer, double* input, int inputSize, double* output, int outputSize) -> void.
@@ -42,22 +46,24 @@ _lib.predictNN.argtypes = [
     ctypes.POINTER(ctypes.c_double), ctypes.c_int,
     ctypes.POINTER(ctypes.c_double), ctypes.c_int
 ]
-
+"""
 # cleanupDevice: (pointer) -> void.
-_lib.cleanupDevice.restype = None
-_lib.cleanupDevice.argtypes = [ctypes.c_void_p]
+_lib.cleanDeviceNN.restype = None
+_lib.cleanDeviceNN.argtypes = [ctypes.c_void_p]
 
 # initBatchNormLayers: (pointer) -> void.
 _lib.initBatchNormLayers.restype = None
 _lib.initBatchNormLayers.argtypes = [ctypes.c_void_p]
 
-# initResidualBlock: (pointer) -> void.
+# initResidualBlock: (pointer, int numNeurons, int numInputs, int activationType, int flag) -> void.
 _lib.initResidualBlock.restype = None
-_lib.initResidualBlock.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+_lib.initResidualBlock.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+"""
 
 # destroyNN: (pointer) -> void.
 _lib.destroyNN.restype = None
 _lib.destroyNN.argtypes = [ctypes.c_void_p]
+
 
 class NeuralNetwork:
     """Python wrapper for the C++ NeuralNetwork library."""
@@ -76,11 +82,11 @@ class NeuralNetwork:
     
     def add_hidden_layer(self, num_neurons, activation_type):
         """
-        Add a subsequent (hidden or output) layer.
+        Add a hidden layer.
         :param num_neurons: Number of neurons.
         :param activation_type: 0 for SIGMOID, 1 for RELU, 2 for TANH.
         """
-        _lib.addLayerNN_noInput(self.nn_ptr, ctypes.c_int(num_neurons), ctypes.c_int(activation_type))
+        _lib.addHiddenLayerNN(self.nn_ptr, ctypes.c_int(num_neurons), ctypes.c_int(activation_type))
 
     def add_output_layer(self, num_neurons, activation_type):
         """
@@ -88,28 +94,28 @@ class NeuralNetwork:
         :param num_neurons: Number of neurons.
         :param activation_type: 0 for SIGMOID, 1 for RELU, 2 for TANH.
         """
-        _lib.addLayerNN_noInput(self.nn_ptr, ctypes.c_int(num_neurons), ctypes.c_int(activation_type))
-    
+        _lib.addOutputLayerNN(self.nn_ptr, ctypes.c_int(num_neurons), ctypes.c_int(activation_type))
+    """
     def init_batch_norm(self):
-        """
-        Initialize batch normalization layers.
-        """
+        
+        #Initialize batch normalization layers.
+        
         _lib.initBatchNormLayers(self.nn_ptr)
     
     def init_residual_block(self, num_neurons, num_inputs, activation_type):
-        """
-        Initialize a residual block.
-        :param num_neurons: Number of neurons.
-        :param activation_type: 0 for SIGMOID, 1 for RELU, 2 for TANH.
-        """
+        #Initialize a residual block.
+        #:param num_neurons: Number of neurons.
+        #:param num_inputs: Number of inputs.
+        #:param activation_type: 0 for SIGMOID, 1 for RELU, 2 for TANH.
         _lib.initResidualBlock(self.nn_ptr, ctypes.c_int(num_neurons), ctypes.c_int(num_inputs), ctypes.c_int(activation_type), ctypes.c_int(1))
-
-    def fit(self, inputs, targets, epochs):
+    """
+    def fit(self, inputs, targets, epochs, batch_size=32):
         """
         Train the network on a dataset.
         :param inputs: numpy array of shape (num_samples, input_size)
         :param targets: numpy array of shape (num_samples, output_size)
         :param epochs: Number of training epochs.
+        :param batch_size: Mini-batch size.
         """
         num_samples, input_size = inputs.shape
         _, output_size = targets.shape
@@ -123,13 +129,13 @@ class NeuralNetwork:
 
         _lib.fitNN(self.nn_ptr, inputs_ptr, ctypes.c_int(num_samples),
                    ctypes.c_int(input_size), targets_ptr, ctypes.c_int(output_size),
-                   ctypes.c_int(epochs))
+                   ctypes.c_int(epochs), ctypes.c_int(batch_size))
     
     def predict(self, input_sample):
         """
         Predict the output for a single input sample.
         :param input_sample: numpy array of shape (input_size,)
-        :return: numpy array of predictions (of size output_size).
+        :return: numpy array of predictions.
         """
         # Ensure input_sample is contiguous and of type double.
         input_sample = np.ascontiguousarray(input_sample, dtype=np.double)
@@ -146,7 +152,8 @@ class NeuralNetwork:
         return output_arr
 
     def cleanDevice(self):
-        _lib.cleanupDevice(self.nn_ptr)
+        _lib.cleanDeviceNN(self.nn_ptr)
+    
     def __del__(self):
         if self.nn_ptr:
             _lib.destroyNN(self.nn_ptr)

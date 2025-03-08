@@ -1,5 +1,5 @@
-Metadata-Version: 2.1
-Name: neural-network
+Metadata-Version: 2.2
+Name: neural_network
 Version: 0.1.0
 Summary: A C++ neural network package with Python bindings
 Author: Akshat Guduru
@@ -11,5 +11,14 @@ Classifier: Operating System :: OS Independent
 Requires-Python: >=3.6
 Description-Content-Type: text/markdown
 License-File: LICENSE
+Requires-Dist: numpy
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
 
 # silicon_nn
