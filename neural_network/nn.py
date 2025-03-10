@@ -46,11 +46,11 @@ _lib.predictNN.argtypes = [
     ctypes.POINTER(ctypes.c_double), ctypes.c_int,
     ctypes.POINTER(ctypes.c_double), ctypes.c_int
 ]
-"""
+
 # cleanupDevice: (pointer) -> void.
 _lib.cleanDeviceNN.restype = None
 _lib.cleanDeviceNN.argtypes = [ctypes.c_void_p]
-
+"""
 # initBatchNormLayers: (pointer) -> void.
 _lib.initBatchNormLayers.restype = None
 _lib.initBatchNormLayers.argtypes = [ctypes.c_void_p]

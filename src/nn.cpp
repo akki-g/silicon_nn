@@ -12,6 +12,9 @@
 #include <functional>
 #include <random>
 #include <algorithm>
+#include <Eigen/Dense>
+using Eigen::MatrixXd;
+using Eigen::VectorXd;
 
 using namespace std;
 
@@ -46,8 +49,15 @@ double tanhDerivative(double y) {
     return 1.0 - y * y;
 }
 
-// For softmax, we will handle the activation in the forward pass.
-// Here we just use identity (the derivative is built into the cross-entropy loss).
+double softmax(double x) {
+    return exp(x);
+}
+double softmaxDerivative(double y) {
+    return 1.0;
+}
+
+// For softmax, we handle it in the forward pass.
+// Here we simply return identity.
 Activation getActivation(ActivationType type) {
     switch (type) {
         case SIGMOID: return { sigmoid, sigmoidDerivative };
@@ -63,13 +73,17 @@ Activation getActivation(ActivationType type) {
 // ---------------------------
 // Dropout (applied during forward pass)
 // ---------------------------
-void applyDropout(vector<double>& activations, double dropoutProb) {
-    for (size_t i = 0; i < activations.size(); i++) {
-        double r = (double)rand() / RAND_MAX;
-        if (r < dropoutProb)
-            activations[i] = 0.0;
-        else
-            activations[i] /= (1.0 - dropoutProb);
+void applyDropout(MatrixXd& A, double prob) {
+    for (int i = 0; i < A.rows(); i++) {
+        for (int j = 0; j < A.cols(); j++) {
+            double r = (double)rand() / RAND_MAX;
+            if (r < prob) {
+                A(i, j) = 0.0;
+            }
+            else {
+                A(i, j) /= (1.0 - prob);
+            }
+        }
     }
 }
 
@@ -80,12 +94,11 @@ class Neuron {
 public:
     vector<double> weights;
     double bias;
-    vector<double> m_w, v_w;  // For Adam optimizer (weights)
-    double m_b, v_b;          // For Adam optimizer (bias)
+    vector<double> m_w, v_w;  // Adam accumulators for weights
+    double m_b, v_b;          // Adam accumulators for bias
     double output;            // Latest output after activation
 
     Neuron(int numInputs) {
-        // Xavier initialization (using fan_in)
         double limit = sqrt(6.0 / numInputs);
         static default_random_engine engine((unsigned)time(NULL));
         uniform_real_distribution<double> dist(-limit, limit);
@@ -119,17 +132,15 @@ public:
         }
     }
 
-    // Forward pass: compute each neuron's output
+    // Per-sample forward pass (unchanged)
     vector<double> forward(const vector<double>& inputs, Device* device) {
         size_t numNeurons = neurons.size();
         vector<double> outputs(numNeurons, 0.0);
         if (actType == SOFTMAX) {
-            // Compute logits first
             vector<double> logits(numNeurons, 0.0);
             for (size_t i = 0; i < numNeurons; i++) {
                 logits[i] = device->dot(inputs, neurons[i].weights) + neurons[i].bias;
             }
-            // Softmax computation for numerical stability
             double maxLogit = *max_element(logits.begin(), logits.end());
             double sumExp = 0.0;
             for (size_t i = 0; i < numNeurons; i++) {
@@ -148,6 +159,51 @@ public:
             }
         }
         return outputs;
+    }
+
+    // Batched forward pass using Eigen.
+    // A: (m x n) matrix, where m = number of samples and n = input dimension.
+    // Returns: (m x k) matrix, where k = number of neurons.
+    MatrixXd forwardBatch(const MatrixXd &A) {
+        int m = A.rows();            // number of samples
+        int n = A.cols();            // input feature dimension
+        int k = neurons.size();      // number of neurons
+
+        // Create weight matrix W of shape (k x n)
+        MatrixXd W(k, n);
+        for (int i = 0; i < k; i++) {
+            for (int j = 0; j < n; j++) {
+                W(i, j) = neurons[i].weights[j];
+            }
+        }
+
+        // Create bias vector b of length k
+        VectorXd b(k);
+        for (int i = 0; i < k; i++) {
+            b(i) = neurons[i].bias;
+        }
+
+        // Compute Z = A * Wᵀ + b, where A is (m x n) and Wᵀ is (n x k)
+        MatrixXd Z = A * W.transpose();
+        Z.rowwise() += b.transpose();
+
+        if (actType != SOFTMAX) {
+            MatrixXd A_out = Z.unaryExpr([this](double z) { return activation.func(z); });
+            return A_out;
+        }
+        else {
+            MatrixXd A_out(m, k);
+            for (int i = 0; i < m; i++) {
+                double maxVal = Z.row(i).maxCoeff();
+                VectorXd exps = (Z.row(i).array() - maxVal).exp();
+                double sumExps = exps.sum();
+                A_out.row(i) = exps.transpose() / sumExps;
+            }
+            for (int i = 0; i < k; i++) {
+                neurons[i].output = A_out.col(i).mean();
+            }
+            return A_out;
+        }
     }
 };
 
@@ -201,32 +257,57 @@ public:
         layers.push_back(DenseLayer(numNeurons, prevSize, actType));
     }
 
-    // Compute forward pass through all layers and store activations
-    // activations[0] is the input; activations[i] (i>=1) is the output from layer i-1.
+    // Per-sample forward pass (for compatibility)
     vector< vector<double> > forwardAllLayers(const vector<double>& input) {
         vector< vector<double> > activations;
         activations.push_back(input); // input layer
         vector<double> current = input;
         for (size_t l = 0; l < layers.size(); l++) {
             current = layers[l].forward(current, device);
-            // Apply dropout on hidden layers (skip output layer)
             if (isTraining && useDropout && l < layers.size() - 1) {
-                applyDropout(current, dropoutProb);
+                for (size_t i = 0; i < current.size(); i++) {
+                    double r = (double)rand() / RAND_MAX;
+                    if (r < dropoutProb)
+                        current[i] = 0.0;
+                    else
+                        current[i] /= (1.0 - dropoutProb);
+                }
             }
             activations.push_back(current);
         }
         return activations;
     }
 
-    // Mini-batch training: perform forward and backward pass on a batch and update parameters.
+    // Batched forward pass using Eigen.
+    // Converts a batch of samples (vector<vector<double>>) into an Eigen matrix,
+    // then propagates through all layers.
+    MatrixXd forwardBatch(const vector< vector<double> > &batchInputs) {
+        int m = batchInputs.size();
+        int n = batchInputs[0].size();
+        MatrixXd X(m, n);
+        for (int i = 0; i < m; i++) {
+            for (int j = 0; j < n; j++) {
+                X(i, j) = batchInputs[i][j];
+            }
+        }
+        MatrixXd A = X;
+        for (size_t l = 0; l < layers.size(); l++) {
+            A = layers[l].forwardBatch(A);
+            if (isTraining && useDropout && l < layers.size() - 1) {
+                applyDropout(A, dropoutProb);
+            }
+        }
+        return A;
+    }
+
+    // Mini-batch training using per-sample backpropagation.
     void trainBatch(const vector< vector<double> >& batchInputs,
                     const vector< vector<double> >& batchTargets)
     {
         size_t batchSize = batchInputs.size();
         int L = layers.size();
 
-        // Initialize accumulators for gradients:
-        // gradW[l][i][j] is the gradient for weight j of neuron i in layer l.
+        // Initialize gradient accumulators for each layer.
         vector< vector< vector<double> > > gradW(L);
         vector< vector<double> > gradB(L);
         for (int l = 0; l < L; l++) {
@@ -236,25 +317,22 @@ public:
             gradB[l].resize(numNeurons, 0.0);
         }
 
-        // Process each sample in the batch
+        // Process each sample in the mini-batch.
         for (size_t s = 0; s < batchSize; s++) {
-            // Forward pass: store activations from input to output
             vector< vector<double> > activations = forwardAllLayers(batchInputs[s]);
-            // Backward pass: compute deltas for each layer
             vector< vector<double> > deltas(L);
 
-            // --- Output layer delta ---
+            // Compute delta for output layer.
             int outLayer = L - 1;
-            int outSize = activations.back().size(); // final output size
+            int outSize = activations.back().size();
             deltas[outLayer].resize(outSize, 0.0);
             for (int i = 0; i < outSize; i++) {
                 double a = activations.back()[i];
                 double t = batchTargets[s][i];
-                // For cross-entropy loss with sigmoid/softmax output, delta = (a - t)
                 deltas[outLayer][i] = a - t;
             }
 
-            // --- Hidden layers deltas (backpropagation) ---
+            // Backpropagate through hidden layers.
             for (int l = L - 2; l >= 0; l--) {
                 int layerSize = layers[l].neurons.size();
                 deltas[l].resize(layerSize, 0.0);
@@ -264,17 +342,16 @@ public:
                     for (int j = 0; j < nextLayerNeurons; j++) {
                         errorSum += layers[l + 1].neurons[j].weights[i] * deltas[l + 1][j];
                     }
-                    // Use the activation output from the current layer (activations[l+1])
                     double a = activations[l + 1][i];
                     deltas[l][i] = errorSum * layers[l].activation.derivative(a);
                 }
             }
 
-            // --- Accumulate gradients for each layer ---
+            // Accumulate gradients.
             for (int l = 0; l < L; l++) {
                 int numNeurons = layers[l].neurons.size();
                 int inputSize = (l == 0) ? batchInputs[s].size() : layers[l - 1].neurons.size();
-                const vector<double>& layerInput = activations[l]; // input to layer l
+                const vector<double>& layerInput = activations[l];
                 for (int i = 0; i < numNeurons; i++) {
                     for (int j = 0; j < inputSize; j++) {
                         gradW[l][i][j] += deltas[l][i] * layerInput[j];
@@ -284,7 +361,7 @@ public:
             }
         } // end for each sample
 
-        // --- Update parameters: average gradients over batch and use optimizer ---
+        // Update parameters using averaged gradients.
         for (int l = 0; l < L; l++) {
             int numNeurons = layers[l].neurons.size();
             int inputSize = (l == 0) ? batchInputs[0].size() : layers[l - 1].neurons.size();
@@ -306,7 +383,7 @@ public:
         }
     }
 
-    // Fit the network for a given number of epochs using mini-batch training.
+    // Fit the network using mini-batch training for a given number of epochs.
     void fit(const vector< vector<double> >& inputs,
              const vector< vector<double> >& targets,
              int epochs, int batchSize = 32)
@@ -364,26 +441,18 @@ void destroyNN(NeuralNetwork* nn) {
     delete nn;
 }
 
-// Add the first layer (input size provided)
 void addLayerNN(NeuralNetwork* nn, int numNeurons, int inputSize, int activationType) {
     nn->addLayer(numNeurons, inputSize, static_cast<ActivationType>(activationType));
 }
 
-// Add a hidden layer (input size inferred from previous layer)
 void addHiddenLayerNN(NeuralNetwork* nn, int numNeurons, int activationType) {
     nn->addLayer(numNeurons, static_cast<ActivationType>(activationType));
 }
 
-// Add an output layer (same as hidden layer in our simple design)
 void addOutputLayerNN(NeuralNetwork* nn, int numNeurons, int activationType) {
     nn->addLayer(numNeurons, static_cast<ActivationType>(activationType));
 }
 
-// Fit the network using mini-batch training.
-// The inputs and targets are provided as flat arrays.
-// 'numSamples' is the number of samples,
-// 'inputSize' and 'targetSize' are dimensions per sample,
-// 'epochs' is the number of epochs, and 'batchSize' is the mini-batch size.
 void fitNN(NeuralNetwork* nn, double* inputs, int numSamples, int inputSize,
            double* targets, int targetSize, int epochs, int batchSize) {
     vector< vector<double> > inVec(numSamples, vector<double>(inputSize));
@@ -399,7 +468,6 @@ void fitNN(NeuralNetwork* nn, double* inputs, int numSamples, int inputSize,
     nn->fit(inVec, tarVec, epochs, batchSize);
 }
 
-// Train on a single sample.
 void trainSampleNN(NeuralNetwork* nn, double* input, int inputSize, double* target, int targetSize) {
     vector<double> inVec(input, input + inputSize);
     vector<double> tarVec(target, target + targetSize);
@@ -408,7 +476,6 @@ void trainSampleNN(NeuralNetwork* nn, double* input, int inputSize, double* targ
     nn->trainBatch(batchInput, batchTarget);
 }
 
-// Predict for a single sample. The output is written to the provided output array.
 void predictNN(NeuralNetwork* nn, double* input, int inputSize, double* output, int outputSize) {
     vector<double> inVec(input, input + inputSize);
     vector<double> pred = nn->predict(inVec);
@@ -418,17 +485,15 @@ void predictNN(NeuralNetwork* nn, double* input, int inputSize, double* output, 
     }
 }
 
-// Set training mode (non-zero for true, zero for false).
 void setTrainingModeNN(NeuralNetwork* nn, int mode) {
     nn->setTrainingMode(mode != 0);
 }
 
-// Clean up device resources.
 void cleanDeviceNN(NeuralNetwork* nn) {
     if (nn && nn->device){
         nn->cleanDevice();
         nn->device = nullptr;
-        }
+    }
 }
 
 } // extern "C"

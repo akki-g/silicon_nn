@@ -46,10 +46,11 @@ epochs = 100  # Reduced to 100 to avoid excessive runtime
 # -------------------------
 # Benchmark: Custom Neural Network
 # -------------------------
+
 print("Benchmarking Custom Neural Network:")
 start_time = time.time()
 lr = 0.01
-custom_nn = NeuralNetwork(lr, "g")
+custom_nn = NeuralNetwork(lr, "c")
 custom_nn.add_layer(128, input_size=X_train_flat.shape[1], activation_type=1)  # Hidden layer: ReLU
 custom_nn.add_hidden_layer(128, activation_type=1)  # Hidden layer: ReLU
 custom_nn.add_hidden_layer(128, activation_type=1)  # Hidden layer: ReLU
@@ -63,6 +64,7 @@ custom_accuracy = accuracy_score(y_test.flatten(), custom_predictions)
 print(f"Custom NN Training Time: {custom_time:.2f} seconds")
 print(f"Custom NN Test Accuracy: {custom_accuracy:.2f}")
 custom_nn.cleanDevice()
+
 
 # -------------------------
 # Benchmark: scikit-learn MLPClassifier
