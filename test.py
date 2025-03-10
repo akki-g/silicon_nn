@@ -85,7 +85,7 @@ print(f"MLPClassifier Test Accuracy: {sk_accuracy:.2f}")
 # Benchmark: PyTorch (Using Metal MPS)
 # -------------------------
 print("\nBenchmarking PyTorch:")
-device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+device = torch.device("cpu")
 print(f"Using device: {device}")
 
 class PyTorchNN(nn.Module):
