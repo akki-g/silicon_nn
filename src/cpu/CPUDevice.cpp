@@ -1,6 +1,6 @@
 #include "CPUDevice.h"
 #include <Eigen/Dense>
-
+using Eigen::MatrixXd;
 
 double CPUDevice::dot(const std::vector<double>& a, const std::vector<double>& b) {
     Eigen::Map<const Eigen::VectorXd> A(a.data(), a.size());
@@ -28,4 +28,11 @@ void CPUDevice::applyActivation(std::vector<double>& data, double (*activation)(
     for (auto& d : data) {
         d = activation(d);
     }
+}
+
+Eigen::MatrixXd CPUDevice::matmulGPU(const Eigen::MatrixXd &A, const Eigen::MatrixXd &W, const Eigen::VectorXd &b) {
+
+    MatrixXd Z = A * W.transpose();
+    Z.rowwise() += b.transpose();
+    return Z;
 }

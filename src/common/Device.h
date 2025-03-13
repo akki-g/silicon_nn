@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <iostream>
+#include <Eigen/Dense> 
 
 // Define the available device types. For now, CPU and GPU (via Metal on macOS).
 enum class DeviceType {
@@ -17,6 +18,8 @@ class Device {
         // Compute the dot product between two vectors.
         // Each vector is assumed to have the same length.
         virtual double dot(const std::vector<double>& a, const std::vector<double>& b) = 0;
+
+        virtual Eigen::MatrixXd matmulGPU(const Eigen::MatrixXd &A, const Eigen::MatrixXd &W, const Eigen::VectorXd &b) = 0;
 
         // Perform matrix multiplication.
         // A is an A_rows x A_cols matrix and B is an A_cols x B_cols matrix.

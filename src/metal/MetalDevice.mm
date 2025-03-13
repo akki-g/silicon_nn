@@ -1,23 +1,25 @@
 #import "MetalDevice.h"
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
-#import <Metal/Metal.h> 
+#import <Metal/Metal.h>
 #include <iostream>
+#include <Eigen/Dense>
+
+using Eigen::MatrixXd;
+using Eigen::VectorXd;
 
 MetalDevice::MetalDevice() {
     metalDevice = MTLCreateSystemDefaultDevice();
     if (metalDevice) {
         commandQueue = [metalDevice newCommandQueue];
         std::cout << "MetalDevice created" << std::endl;
-    }
-    else {
+    } else {
         std::cerr << "Metal device not found" << std::endl;
         exit(1);
     }
 }
 
 MetalDevice::~MetalDevice() {
-    // Optionally, you could call cleanup() here to ensure cleanup on destruction.
     if (!isCleaned) {
         cleanup();
     }
@@ -29,21 +31,19 @@ double MetalDevice::dot(const std::vector<double>& a, const std::vector<double>&
         std::cerr << "Vectors must have the same size" << std::endl;
         exit(1);
     }
-
     double result = 0;
     for (int i = 0; i < a.size(); i++) {
         result += a[i] * b[i];
     }
-
     return result;
 }
 
-std::vector<double> MetalDevice::matmul(const std::vector<double>& A, const std::vector<double>& B, int A_rows, int A_cols, int B_cols) {
+std::vector<double> MetalDevice::matmul(const std::vector<double>& A, const std::vector<double>& B,
+                                        int A_rows, int A_cols, int B_cols) {
     if (A.size() != A_rows * A_cols || B.size() != A_cols * B_cols) {
         std::cerr << "Matrix dimensions do not match" << std::endl;
         exit(1);
     }
-
     std::vector<double> C(A_rows * B_cols, 0);
     for (int i = 0; i < A_rows; i++) {
         for (int j = 0; j < B_cols; j++) {
@@ -52,7 +52,6 @@ std::vector<double> MetalDevice::matmul(const std::vector<double>& A, const std:
             }
         }
     }
-
     return C;
 }
 
@@ -62,13 +61,21 @@ void MetalDevice::applyActivation(std::vector<double>& A, double (*activation)(d
     }
 }
 
+// Stub for GPU-accelerated matrix multiply using Metal.
+// For now, we simply fallback to CPU using Eigen.
+MatrixXd MetalDevice::matmulGPU(const MatrixXd &A, const MatrixXd &W, const VectorXd &b) {
+    MatrixXd Z = A * W.transpose();
+    Z.rowwise() += b.transpose();
+    return Z;
+}
+
 bool MetalDevice::metalIsAvailable() {
     id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
     return (dev != nil);
 }
 
 void MetalDevice::cleanup() {
-    if (isCleaned) return;  // Prevent double cleanup.
+    if (isCleaned) return;
     std::cout << "MetalDevice: Cleanup called, releasing Metal resources." << std::endl;
 #ifdef __OBJC__
     if (commandQueue) {

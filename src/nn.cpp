@@ -164,35 +164,40 @@ public:
     // Batched forward pass using Eigen.
     // A: (m x n) matrix, where m = number of samples and n = input dimension.
     // Returns: (m x k) matrix, where k = number of neurons.
-    MatrixXd forwardBatch(const MatrixXd &A) {
-        int m = A.rows();            // number of samples
-        int n = A.cols();            // input feature dimension
-        int k = neurons.size();      // number of neurons
-
-        // Create weight matrix W of shape (k x n)
+    MatrixXd forwardBatch(const MatrixXd &A, Device* device) {
+        int m = A.rows();   // number of samples
+        int n = A.cols();   // input dimension
+        int k = neurons.size(); // number of neurons
+        
+        // Build weight matrix W (k x n) and bias vector b.
         MatrixXd W(k, n);
         for (int i = 0; i < k; i++) {
             for (int j = 0; j < n; j++) {
                 W(i, j) = neurons[i].weights[j];
             }
         }
-
-        // Create bias vector b of length k
         VectorXd b(k);
         for (int i = 0; i < k; i++) {
             b(i) = neurons[i].bias;
         }
-
-        // Compute Z = A * Wᵀ + b, where A is (m x n) and Wᵀ is (n x k)
-        MatrixXd Z = A * W.transpose();
-        Z.rowwise() += b.transpose();
-
-        if (actType != SOFTMAX) {
-            MatrixXd A_out = Z.unaryExpr([this](double z) { return activation.func(z); });
-            return A_out;
+        
+        // Use GPU-accelerated matmul if available.
+        MatrixXd Z;
+        // dynamic_cast returns non-null if device is a MetalDevice.
+        if (dynamic_cast<MetalDevice*>(device)) {
+            MetalDevice* gpu = dynamic_cast<MetalDevice*>(device);
+            Z = gpu->matmulGPU(A, W, b);
+        } else {
+            // CPU fallback using Eigen.
+            Z = A * W.transpose();
+            Z.rowwise() += b.transpose();
         }
-        else {
-            MatrixXd A_out(m, k);
+        
+        MatrixXd A_out;
+        if (actType != SOFTMAX) {
+            A_out = Z.unaryExpr([this](double z) { return activation.func(z); });
+        } else {
+            A_out.resize(m, k);
             for (int i = 0; i < m; i++) {
                 double maxVal = Z.row(i).maxCoeff();
                 VectorXd exps = (Z.row(i).array() - maxVal).exp();
@@ -202,8 +207,8 @@ public:
             for (int i = 0; i < k; i++) {
                 neurons[i].output = A_out.col(i).mean();
             }
-            return A_out;
         }
+        return A_out;
     }
 };
 
@@ -211,6 +216,8 @@ public:
 // NeuralNetwork: main class implementing forward and backpropagation
 // ---------------------------
 class NeuralNetwork {
+private:
+    ThreadPool pool;
 public:
     vector<DenseLayer> layers;
     Device* device;
@@ -221,7 +228,7 @@ public:
     bool isTraining;
 
     NeuralNetwork(double lr = 0.001, char devType = 'c', bool dropout = true, double dropProb = 0.1, double weightDecay = 0.0001)
-        : learningRate(lr), useDropout(dropout), dropoutProb(dropProb), isTraining(true)
+        : learningRate(lr), useDropout(dropout), dropoutProb(dropProb), isTraining(true), pool(std::thread::hardware_concurrency())
     {
         if (devType == 'c')
             device = new CPUDevice();
@@ -292,7 +299,7 @@ public:
         }
         MatrixXd A = X;
         for (size_t l = 0; l < layers.size(); l++) {
-            A = layers[l].forwardBatch(A);
+            A = layers[l].forwardBatch(A, device);
             if (isTraining && useDropout && l < layers.size() - 1) {
                 applyDropout(A, dropoutProb);
             }
@@ -302,37 +309,44 @@ public:
 
     // Mini-batch training using per-sample backpropagation.
     void trainBatch(const vector< vector<double> >& batchInputs,
-                    const vector< vector<double> >& batchTargets)
+        const vector< vector<double> >& batchTargets)
     {
         size_t batchSize = batchInputs.size();
         int L = layers.size();
 
-        // Initialize gradient accumulators for each layer.
-        vector< vector< vector<double> > > gradW(L);
-        vector< vector<double> > gradB(L);
-        for (int l = 0; l < L; l++) {
-            int numNeurons = layers[l].neurons.size();
-            int inputSize = (l == 0) ? batchInputs[0].size() : layers[l - 1].neurons.size();
-            gradW[l].resize(numNeurons, vector<double>(inputSize, 0.0));
-            gradB[l].resize(numNeurons, 0.0);
-        }
+        // Containers to hold per-sample gradients.
+        // gradW_all[s][l][i][j] is the gradient for the j-th weight of neuron i in layer l for sample s.
+        vector< vector< vector< vector<double> > > > gradW_all(batchSize);
+        // gradB_all[s][l][i] is the gradient for the bias of neuron i in layer l for sample s.
+        vector< vector< vector<double> > > gradB_all(batchSize);
 
-        // Process each sample in the mini-batch.
-        for (size_t s = 0; s < batchSize; s++) {
+
+        // Process each sample in parallel.
+        int blocks = std::min((int)batchSize, 4 * (int)pool.getWorkerCount());
+
+        parallel_for<size_t>(0, blocks, [&](size_t s) {
+        // Compute forward pass for sample s using the per-sample forwardAllLayers method.
             vector< vector<double> > activations = forwardAllLayers(batchInputs[s]);
+
+            // Initialize a container for the deltas for each layer.
             vector< vector<double> > deltas(L);
 
-            // Compute delta for output layer.
+            // -----------------------
+            // Compute delta for the output layer.
+            // -----------------------
             int outLayer = L - 1;
             int outSize = activations.back().size();
             deltas[outLayer].resize(outSize, 0.0);
             for (int i = 0; i < outSize; i++) {
                 double a = activations.back()[i];
                 double t = batchTargets[s][i];
+                // For cross-entropy loss with sigmoid/softmax output, delta = (a - t)
                 deltas[outLayer][i] = a - t;
             }
 
+            // -----------------------
             // Backpropagate through hidden layers.
+            // -----------------------
             for (int l = L - 2; l >= 0; l--) {
                 int layerSize = layers[l].neurons.size();
                 deltas[l].resize(layerSize, 0.0);
@@ -347,38 +361,58 @@ public:
                 }
             }
 
-            // Accumulate gradients.
+            // -----------------------
+            // Compute gradients for this sample.
+            // -----------------------
+            vector< vector< vector<double> > > sampleGradW(L);
+            vector< vector<double> > sampleGradB(L);
             for (int l = 0; l < L; l++) {
                 int numNeurons = layers[l].neurons.size();
                 int inputSize = (l == 0) ? batchInputs[s].size() : layers[l - 1].neurons.size();
+                sampleGradW[l].resize(numNeurons, vector<double>(inputSize, 0.0));
+                sampleGradB[l].resize(numNeurons, 0.0);
                 const vector<double>& layerInput = activations[l];
                 for (int i = 0; i < numNeurons; i++) {
                     for (int j = 0; j < inputSize; j++) {
-                        gradW[l][i][j] += deltas[l][i] * layerInput[j];
+                        sampleGradW[l][i][j] = deltas[l][i] * layerInput[j];
                     }
-                    gradB[l][i] += deltas[l][i];
+                    sampleGradB[l][i] = deltas[l][i];
                 }
             }
-        } // end for each sample
+            gradW_all[s] = sampleGradW;
+            gradB_all[s] = sampleGradB;
+        }, pool);
 
-        // Update parameters using averaged gradients.
+        // -----------------------
+        // Reduce gradients over all samples and update parameters.
+        // -----------------------
         for (int l = 0; l < L; l++) {
             int numNeurons = layers[l].neurons.size();
             int inputSize = (l == 0) ? batchInputs[0].size() : layers[l - 1].neurons.size();
             for (int i = 0; i < numNeurons; i++) {
-                vector<double> avgGrad(inputSize, 0.0);
-                for (int j = 0; j < inputSize; j++) {
-                    avgGrad[j] = gradW[l][i][j] / batchSize;
+                vector<double> sumGrad(inputSize, 0.0);
+                double sumGradBias = 0.0;
+                for (size_t s = 0; s < batchSize; s++) {
+                    for (int j = 0; j < inputSize; j++) {
+                        sumGrad[j] += gradW_all[s][l][i][j];
+                    }
+                    sumGradBias += gradB_all[s][l][i];
                 }
-                double avgGradBias = gradB[l][i] / batchSize;
+                // Average the gradients over the batch.
+                for (int j = 0; j < inputSize; j++) {
+                    sumGrad[j] /= batchSize;
+                }
+                sumGradBias /= batchSize;
+                
+                // Update the weights and bias using your optimizer.
                 optimizer->updateVector(layers[l].neurons[i].weights,
-                                          layers[l].neurons[i].m_w,
-                                          layers[l].neurons[i].v_w,
-                                          avgGrad);
+                                        layers[l].neurons[i].m_w,
+                                        layers[l].neurons[i].v_w,
+                                        sumGrad);
                 optimizer->updateScalar(layers[l].neurons[i].bias,
                                         layers[l].neurons[i].m_b,
                                         layers[l].neurons[i].v_b,
-                                        avgGradBias);
+                                        sumGradBias);
             }
         }
     }
@@ -497,3 +531,5 @@ void cleanDeviceNN(NeuralNetwork* nn) {
 }
 
 } // extern "C"
+
+

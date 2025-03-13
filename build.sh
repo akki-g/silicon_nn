@@ -19,7 +19,7 @@ for src in "${SOURCES[@]}"; do
 done
 
 if [[ "$(uname)" == "Darwin" ]]; then
-    clang++ -dynamiclib -arch arm64 -I./include -o ${OUTPUT_DIR}/libnn.dylib "${OBJS[@]}" -framework Metal -framework Foundation -Wl,-rpath,/usr/local/lib
+    clang++ -dynamiclib -arch arm64 -I./include -o ${OUTPUT_DIR}/libnn.dylib "${OBJS[@]}" -framework Metal -framework Foundation -framework Accelerate -Wl,-rpath,/usr/local/lib
 else
     g++ -shared -fPIC -I./include -o ${OUTPUT_DIR}/libnn.so "${OBJS[@]}" -Wl,-rpath,/usr/local/lib
 fi

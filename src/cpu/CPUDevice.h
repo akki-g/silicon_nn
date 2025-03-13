@@ -7,6 +7,7 @@ public:
     virtual ~CPUDevice() {}
 
     double dot(const std::vector<double>& a, const std::vector<double>& b) override;
+    virtual Eigen::MatrixXd matmulGPU(const Eigen::MatrixXd &A, const Eigen::MatrixXd &W, const Eigen::VectorXd &b) override;
 
     std::vector<double> matmul(const std::vector<double>& A, const std::vector<double>& B,
         int A_rows, int A_cols, int B_cols) override;

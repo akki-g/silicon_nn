@@ -13,6 +13,7 @@
 
 #include "../common/Device.h"
 #include <vector>
+#include <Eigen/Dense> 
 
 // MetalDevice is a subclass of Device that uses Apple's Metal for GPU acceleration.
 class MetalDevice : public Device {
@@ -20,12 +21,16 @@ public:
     MetalDevice();
     virtual ~MetalDevice();
 
+    virtual Eigen::MatrixXd matmulGPU(const Eigen::MatrixXd &A, const Eigen::MatrixXd &W, const Eigen::VectorXd &b) override;
+
     // Overrides of Device methods
     double dot(const std::vector<double>& a, const std::vector<double>& b) override;
     std::vector<double> matmul(const std::vector<double>& A, const std::vector<double>& B,
                                int A_rows, int A_cols, int B_cols) override;
     void applyActivation(std::vector<double>& data, double (*activation)(double)) override;
     
+    
+
     void cleanup() override;
     // Static method to check if Metal is available.
     static bool metalIsAvailable();
