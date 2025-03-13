@@ -265,24 +265,29 @@ public:
     }
 
     // Per-sample forward pass (for compatibility)
-    vector< vector<double> > forwardAllLayers(const vector<double>& input) {
-        vector< vector<double> > activations;
-        activations.push_back(input); // input layer
+    void forwardAllLayers(const vector<double>& input, vector< vector<double> >& activations) {
+        int numLayers = layers.size(); 
+        activations.resize(numLayers + 1);
+
+        activations[0] = input;
+
         vector<double> current = input;
         for (size_t l = 0; l < layers.size(); l++) {
-            current = layers[l].forward(current, device);
+            int layerSize = layers[l].neurons.size();
+            vector <double> layerOutput(layerSize, 0.0);
+            layerOutput = layers[l].forward(current, device);
             if (isTraining && useDropout && l < layers.size() - 1) {
-                for (size_t i = 0; i < current.size(); i++) {
+                for (size_t i = 0; i < layerOutput.size(); i++) {
                     double r = (double)rand() / RAND_MAX;
                     if (r < dropoutProb)
-                        current[i] = 0.0;
+                    layerOutput[i] = 0.0;
                     else
-                        current[i] /= (1.0 - dropoutProb);
+                    layerOutput[i] /= (1.0 - dropoutProb);
                 }
             }
-            activations.push_back(current);
+            activations[l + 1] = layerOutput;
+            current = activations[l+1];
         }
-        return activations;
     }
 
     // Batched forward pass using Eigen.
@@ -322,65 +327,71 @@ public:
 
 
         // Process each sample in parallel.
-        int blocks = std::min((int)batchSize, 4 * (int)pool.getWorkerCount());
+        int numTasks = pool.getWorkerCount();
+        int blockSize = (batchSize + numTasks - 1) / numTasks;
 
-        parallel_for<size_t>(0, blocks, [&](size_t s) {
+        parallel_for<size_t>(0, numTasks, [&](size_t taskIndex) {
         // Compute forward pass for sample s using the per-sample forwardAllLayers method.
-            vector< vector<double> > activations = forwardAllLayers(batchInputs[s]);
+            int start = taskIndex * blockSize;
+            int end = std::min(start + blockSize, (int)batchSize);
+            for (size_t s = start; s < end; s++) {
+                vector< vector<double> > activations;
+                forwardAllLayers(batchInputs[s], activations);
 
-            // Initialize a container for the deltas for each layer.
-            vector< vector<double> > deltas(L);
+                // Initialize a container for the deltas for each layer.
+                vector< vector<double> > deltas(L);
 
-            // -----------------------
-            // Compute delta for the output layer.
-            // -----------------------
-            int outLayer = L - 1;
-            int outSize = activations.back().size();
-            deltas[outLayer].resize(outSize, 0.0);
-            for (int i = 0; i < outSize; i++) {
-                double a = activations.back()[i];
-                double t = batchTargets[s][i];
-                // For cross-entropy loss with sigmoid/softmax output, delta = (a - t)
-                deltas[outLayer][i] = a - t;
-            }
-
-            // -----------------------
-            // Backpropagate through hidden layers.
-            // -----------------------
-            for (int l = L - 2; l >= 0; l--) {
-                int layerSize = layers[l].neurons.size();
-                deltas[l].resize(layerSize, 0.0);
-                for (int i = 0; i < layerSize; i++) {
-                    double errorSum = 0.0;
-                    int nextLayerNeurons = layers[l + 1].neurons.size();
-                    for (int j = 0; j < nextLayerNeurons; j++) {
-                        errorSum += layers[l + 1].neurons[j].weights[i] * deltas[l + 1][j];
-                    }
-                    double a = activations[l + 1][i];
-                    deltas[l][i] = errorSum * layers[l].activation.derivative(a);
+                // -----------------------
+                // Compute delta for the output layer.
+                // -----------------------
+                int outLayer = L - 1;
+                int outSize = activations.back().size();
+                deltas[outLayer].resize(outSize, 0.0);
+                for (int i = 0; i < outSize; i++) {
+                    double a = activations.back()[i];
+                    double t = batchTargets[s][i];
+                    // For cross-entropy loss with sigmoid/softmax output, delta = (a - t)
+                    deltas[outLayer][i] = a - t;
                 }
-            }
 
-            // -----------------------
-            // Compute gradients for this sample.
-            // -----------------------
-            vector< vector< vector<double> > > sampleGradW(L);
-            vector< vector<double> > sampleGradB(L);
-            for (int l = 0; l < L; l++) {
-                int numNeurons = layers[l].neurons.size();
-                int inputSize = (l == 0) ? batchInputs[s].size() : layers[l - 1].neurons.size();
-                sampleGradW[l].resize(numNeurons, vector<double>(inputSize, 0.0));
-                sampleGradB[l].resize(numNeurons, 0.0);
-                const vector<double>& layerInput = activations[l];
-                for (int i = 0; i < numNeurons; i++) {
-                    for (int j = 0; j < inputSize; j++) {
-                        sampleGradW[l][i][j] = deltas[l][i] * layerInput[j];
+                // -----------------------
+                // Backpropagate through hidden layers.
+                // -----------------------
+                for (int l = L - 2; l >= 0; l--) {
+                    int layerSize = layers[l].neurons.size();
+                    deltas[l].resize(layerSize, 0.0);
+                    for (int i = 0; i < layerSize; i++) {
+                        double errorSum = 0.0;
+                        int nextLayerNeurons = layers[l + 1].neurons.size();
+                        for (int j = 0; j < nextLayerNeurons; j++) {
+                            errorSum += layers[l + 1].neurons[j].weights[i] * deltas[l + 1][j];
+                        }
+                        double a = activations[l + 1][i];
+                        deltas[l][i] = errorSum * layers[l].activation.derivative(a);
                     }
-                    sampleGradB[l][i] = deltas[l][i];
                 }
+
+                // -----------------------
+                // Compute gradients for this sample.
+                // -----------------------
+                vector< vector< vector<double> > > sampleGradW(L);
+                vector< vector<double> > sampleGradB(L);
+                for (int l = 0; l < L; l++) {
+                    int numNeurons = layers[l].neurons.size();
+                    int inputSize = (l == 0) ? batchInputs[s].size() : layers[l - 1].neurons.size();
+                    sampleGradW[l].resize(numNeurons, vector<double>(inputSize, 0.0));
+                    sampleGradB[l].resize(numNeurons, 0.0);
+                    const vector<double>& layerInput = activations[l];
+                    for (int i = 0; i < numNeurons; i++) {
+                        for (int j = 0; j < inputSize; j++) {
+                            sampleGradW[l][i][j] = deltas[l][i] * layerInput[j];
+                        }
+                        sampleGradB[l][i] = deltas[l][i];
+                    }
+                }
+                gradW_all[s] = sampleGradW;
+                gradB_all[s] = sampleGradB;
             }
-            gradW_all[s] = sampleGradW;
-            gradB_all[s] = sampleGradB;
         }, pool);
 
         // -----------------------
@@ -447,7 +458,8 @@ public:
     // Predict for a single sample.
     vector<double> predict(const vector<double>& input) {
         setTrainingMode(false);
-        vector< vector<double> > acts = forwardAllLayers(input);
+        vector< vector<double> > acts;
+        forwardAllLayers(input, acts);
         return acts.back();
     }
 
