@@ -3,3 +3,8 @@ torch
 torchvision
 tensorflow
 scikit-learn
+setuptools
+tqdm
+matplotlib
+pandas
+psutil
